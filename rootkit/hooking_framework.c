@@ -17,7 +17,6 @@ _get_addr_by_name(const char *name)
     if (strncmp(name, "__x64_", 6) == 0) {
         name +=6;
     }
-    //name += 6;
     #endif
 
     #if KERNEL_VERSION(5,7,0) <= LINUX_VERSION_CODE
