@@ -61,13 +61,11 @@ _magic_content(struct sk_buff *skb)
     return data;
 }
 
-
 static void
 _spawn_root_rev_shell(void)
 {
     //evtl. hinzufügen.
 }
-
 
 static unsigned int
 _do_magic(struct sk_buff *skb)
@@ -145,7 +143,6 @@ add_netfilter_hook(void)
 
     return ret;
 }
-
 
 void
 remove_netfilter_hook(void)
