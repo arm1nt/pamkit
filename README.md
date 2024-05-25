@@ -1,6 +1,6 @@
 # pamkit
 
-This is a rootkit targeting Linux-PAM to compromise fundamental IT security goals.
+This is a PoC kernel-level rootkit targeting Linux-PAM to compromise fundamental IT security goals.
 
 
 ## Disclaimer
