@@ -2,8 +2,8 @@ _TARGET_NAME := pamk1t
 _OBJ_NAME := pamkit
 
 obj-m += $(_TARGET_NAME).o
-$(_TARGET_NAME)-objs := $(_OBJ_NAME).o hooking_framework.o sys.o read_table.o net.o
-SRC := $(_OBJ_NAME).c hooking_framework.c sys.c read_table.c net.c
+$(_TARGET_NAME)-objs := $(_OBJ_NAME).o hooking_framework.o sys.o read_table.o net.o ./hooking/hooking.o
+SRC := $(_OBJ_NAME).c hooking_framework.c sys.c read_table.c net.c ./hooking/hooking.c
 
 ccflags-y := -std=gnu99
 
