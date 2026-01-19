@@ -2,7 +2,7 @@
 #include <linux/module.h>
 
 #include "hooking_framework.h"
-#include "net.h"
+#include "net/net.h"
 #include "sys.h"
 #include "util/sys_checks.h"
 #include "util/log.h"
