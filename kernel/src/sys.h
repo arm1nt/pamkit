@@ -24,7 +24,7 @@
 #include <linux/mman.h>
 #include <linux/io.h>
 
-#include "read_table.h"
+#include "util/read_table.h"
 
 //On x86-64 systems, from kernel version 4.17.0 onwards, the syscall arguments are passed
 //  via the pt_regs struct, which contains a copy of the register values.

@@ -1,14 +1,15 @@
-//header file
-#ifndef _READ_TABLE_H
-#define _READ_TABLE_H
+#ifndef _PAMKIT_READ_TABLE_H
+#define _PAMKIT_READ_TABLE_H
 
+// TODO: completely re-write. Use kernel provided list impl + sync.
+
+#include <linux/err.h>
+#include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
-#include <linux/errno.h>
-#include <linux/err.h>
 #include <linux/spinlock.h>
 
-//Linked list that stores the read states for the processes that have opened the virtual file.
+/* Linked list where each node represent the read-state of a process reading from the virtual file */
 struct virtual_read_table {
     pid_t pid;
     long offset;
@@ -31,4 +32,4 @@ void destroy_list(void);
 
 void print_list(void);
 
-#endif /* _READ_TABLE_H */
+#endif /* _PAMKIT_READ_TABLE_H */
