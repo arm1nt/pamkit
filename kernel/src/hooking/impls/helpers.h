@@ -1,8 +1,9 @@
 #ifndef _PAMKIT_HELPERS_H
 #define _PAMKIT_HELPERS_H
 
-#include "../hooking.h"
 #include "../approach.h"
+#include "../hooking.h"
+#include "../../symbol_resolver.h"
 #include "../../util/log.h"
 #include "../../util/constants.h"
 
