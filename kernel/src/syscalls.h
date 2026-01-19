@@ -4,52 +4,69 @@
 #include <linux/version.h>
 #include <linux/string.h>
 #include <linux/syscalls.h>
+
 #include "util/log.h"
 #include "util/constants.h"
 #include "hooking/hooking.h"
 
-#if defined(CONFIG_X86_64) && (KERNEL_VERSION(4,17,0) <= LINUX_VERSION_CODE)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
 #define PAMKIT_PTREGS_STUBS 1
 #endif
 
-#define SYSCALL_HOOK_NAME(name) PREPEND_PAMKIT_TOKEN(name##_hook)
-#define SYSCALL_ORIGINAL_NAME(name) PREPEND_PAMKIT_TOKEN(orig_##name)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+#define __syscall_name(name) "__x64_sys_" name
+#else
+#define __syscall_name(name) "" name
+#endif
+
+#define SYSCALL_HOOK_NAME(name) pamkit_##name##_hook
+#define SYSCALL_ORIG_NAME(name) pamkit_orig_##name
 
 #ifdef PAMKIT_PTREGS_STUBS
 
-#define SYSCALL_HOOK_DEFINE(x, name, ...)   \
+#define SYSCALL_HOOK_DEFINE(x, name, ...)                                       \
+    asmlinkage long SYSCALL_HOOK_NAME(name)(const struct pt_regs *pt_regs);     \
     asmlinkage long SYSCALL_HOOK_NAME(name)(const struct pt_regs *pt_regs)
 
 #define SYSCALL_ORIGINAL_DEFINE(x, name, ...)   \
-    static asmlinkage long (*SYSCALL_ORIGINAL_NAME(name))(const struct pt_regs *pt_regs)
+    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(const struct pt_regs *pt_regs)
 
-/* Convenience macros to call the original syscall implementation inside the hook function */
-#define READ_SYSCALL_ORIG X_SYSCALL_ORIG(read)
-#define OPEN_SYSCALL_ORIG X_SYSCALL_ORIG(open)
-#define OPENAT_SYSCALL_ORIG X_SYSCALL_ORIG(openat)
-#define CLOSE_SYSCALL_ORIG X_SYSCALL_ORIG(close)
-#define NEWFSTATAT_SYSCALL_ORIG X_SYSCALL_ORIG(newfstatat)
-#define MMAP_SYSCALL_ORIG X_SYSCALL_ORIG(mmap)
+#define FIRST_ARG(x, _type) (_type) x->di
+#define SECOND_ARG(x, _type) (_type) x->si
+#define THIRD_ARG(x, _type) (_type) x->dx
+#define FOURTH_ARG(x, _type) (_type) x->r10
+#define FIFTH_ARG(x, _type) (_type) x->r8
+#define SIXTH_ARG(x, _type) (_type) x->r9
 
-#define X_SYSCALL_ORIG(name) SYSCALL_ORIGINAL_NAME(name)(pt_regs)
+/* Convenience macros to call the original syscall implementation from inside a hook function */
+#define SYSCALL_ORIG_READ X_SYSCALL_ORIG(read)
+#define SYSCALL_ORIG_OPEN X_SYSCALL_ORIG(open)
+#define SYSCALL_ORIG_OPENAT X_SYSCALL_ORIG(openat)
+#define SYSCALL_ORIG_NEWFSTATAT X_SYSCALL_ORIG(newfstatat)
+#define SYSCALL_ORIG_CLOSE X_SYSCALL_ORIG(close)
+#define SYSCALL_ORIG_MMAP X_SYSCALL_ORIG(mmap)
 
-#else
+#define X_SYSCALL_ORIG(name) SYSCALL_ORIG_NAME(name)(pt_regs)
 
-#define SYSCALL_HOOK_DEFINE(x, name, ...)   \
-    asmlinkage long SYSCALL_HOOK_NAME(name)(__MAP(x, __SC_DECL, __VA_ARGS__))
+#else /* !PAMKIT_PTREGS_STUBS */
+
+#define SYSCALL_HOOK_DEFINE(x, name, ...)                                   \
+    asmlinkage long SYSCALL_HOOK_NAME(__MAP(x, __SC_DECL, __VA_ARGS__));    \
+    asmlinkage long SYSCALL_HOOK_NAME(__MAP(x, __SC_DECL, __VA_ARGS__))
 
 #define SYSCALL_ORIGINAL_DEFINE(x, name, ...)   \
-    static asmlinkage long (*SYSCALL_ORIGINAL_NAME(name))(__MAP(x, __SC_DECL, __VA_ARGS__))
+    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(__MAP(x, __SC_DECL, __VA_ARGS__))
 
-/* Convenience macros to call the original syscall implementation inside the hook function */
-#define READ_SYSCALL_ORIG X_SYSCALL_ORIG(3, read,, fd,, buf,, count)
-#define OPEN_SYSCALL_ORIG X_SYSCALL_ORIG(3, open,, filename,, flags,, mode)
-#define OPENAT_SYSCALL_ORIG X_SYSCALL_ORIG(4, openat,, dfd,, filename,, flags,, mode)
-#define CLOSE_SYSCALL_ORIG X_SYSCALL_ORIG(1, close,, fd)
-#define NEWFSTATAT_SYSCALL_ORIG X_SYSCALL_ORIG(4, newfstatat,, dfd,, filename,, statbuf,, flag)
-#define MMAP_SYSCALL_ORIG X_SYSCALL_ORIG(6, mmap,, addr,, len,, prot,, flags,, fd,, off)
+/* Convenience macros to call the original syscall implementation from inside a hook function */
+/* https://syscalls64.paolostivanin.com/ */
+#define SYSCALL_ORIG_READ X_SYSCALL_ORIG(3, read,, fd,, buf,, count)
+#define SYSCALL_ORIG_OPEN X_SYSCALL_ORIG(3, open,, filename,, flags,, mode)
+#define SYSCALL_ORIG_OPENAT X_SYSCALL_ORIG(4, openat,, dfd,, filename,, flags,, mode)
+#define SYSCALL_ORIG_NEWFSTATAT X_SYSCALL_ORIG(4, newfstatat,, dfd,, filename,, statbuf,, flag)
+#define SYSCALL_ORIG_CLOSE X_SYSCALL_ORIG(1, close,, fd)
+#define SYSCALL_ORIG_MMAP X_SYSCALL_ORIG(6, mmap,, addr,, len,, prot,, flags,, fd,, off)
 
-#define X_SYSCALL_ORIG(x, name, ...) SYSCALL_ORIGINAL_NAME(name)(__MAP(x, __SC_ARGS, __VA_ARGS__))
+#define X_SYSCALL_ORIG(x, name, ...) SYSCALL_ORIG_NAME(name)(__MAP(x, __SC_ARGS, __VA_ARGS__))
 
 #endif /* PAMKIT_PTREGS_STUBS */
 
