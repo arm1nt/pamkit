@@ -25,9 +25,6 @@
 #include <linux/io.h>
 
 #include "read_table.h"
-#include "hooking_framework.h"
-
-MODULE_LICENSE("GPL");
 
 //On x86-64 systems, from kernel version 4.17.0 onwards, the syscall arguments are passed
 //  via the pt_regs struct, which contains a copy of the register values.
@@ -114,9 +111,5 @@ static asmlinkage long (*orig_mmap)(unsigned long addr, unsigned long len, int p
 #define ORIG_MMAP orig_mmap(addr, len, prot, flags, fd, off)
 #endif
 
-
-int do_syscall_hooking(void);
-
-int undo_syscall_hooking(void);
 
 #endif /* _SYS_H */

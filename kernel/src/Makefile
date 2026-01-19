@@ -2,9 +2,10 @@ NAME := pamkit
 
 obj-m := $(NAME).o
 
-$(NAME)-y += init.o symbol_resolver.o read_table.o sys.o hooking_framework.o
+$(NAME)-y += init.o symbol_resolver.o read_table.o sys.o
+$(NAME)-y += hooking/hooking.o hooking/impls/ftrace.o hooking/impls/syscall_table.o \
+			hooking/impls/switch_patching.o hooking/impls/helpers.o
 $(NAME)-y += net/net.o
-
 
 ifeq ($(DEBUG_BUILD), 1)
 	ccflags-y += -DDEBUG -g -O1
@@ -37,7 +38,6 @@ else ifeq ($(SWITCH_PATCHING_HOOKING), 1)
 else ifeq ($(SYSCALL_TABLE_HOOKING), 1)
 	ccflags-y += -DPAMKIT_TABLE_OVERWRITE_SYSCALL_HOOKING
 endif
-
 
 .PHONY: all qemu host clean qemu_deploy
 

