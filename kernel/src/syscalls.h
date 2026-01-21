@@ -39,14 +39,8 @@
 #define SIXTH_ARG(x, _type) (_type) x->r9
 
 /* Convenience macros to call the original syscall implementation from inside a hook function */
-#define SYSCALL_ORIG_READ X_SYSCALL_ORIG(read)
-#define SYSCALL_ORIG_OPEN X_SYSCALL_ORIG(open)
-#define SYSCALL_ORIG_OPENAT X_SYSCALL_ORIG(openat)
-#define SYSCALL_ORIG_NEWFSTATAT X_SYSCALL_ORIG(newfstatat)
-#define SYSCALL_ORIG_CLOSE X_SYSCALL_ORIG(close)
-#define SYSCALL_ORIG_MMAP X_SYSCALL_ORIG(mmap)
-
-#define X_SYSCALL_ORIG(name) SYSCALL_ORIG_NAME(name)(pt_regs)
+/* Not necessary and overkill, yes, but wanted to try doing it like this. */
+#include "generated/syscall_orig_x64.h"
 
 #else /* !PAMKIT_PTREGS_STUBS */
 
