@@ -97,11 +97,11 @@ SYSCALL_HOOK(mmap, unsigned long addr, unsigned long len, int prot, int flags, i
 }
 
 hook_data_t pamkit_syscall_hooks[] = {
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("read"), &SYSCALL_ORIG_NAME(read), SYSCALL_HOOK_NAME(read), __NR_read),
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("open"), &SYSCALL_ORIG_NAME(open), SYSCALL_HOOK_NAME(open), __NR_open),
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("openat"), &SYSCALL_ORIG_NAME(openat), SYSCALL_HOOK_NAME(openat), __NR_openat),
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("newfstatat"), &SYSCALL_ORIG_NAME(newfstatat), SYSCALL_HOOK_NAME(newfstatat), __NR_newfstatat),
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("close"), &SYSCALL_ORIG_NAME(close), SYSCALL_HOOK_NAME(close), __NR_close),
-    SYSCALL_HOOK_DATA_DEFINE(__syscall_name("mmap"), &SYSCALL_ORIG_NAME(mmap), SYSCALL_HOOK_NAME(mmap), __NR_mmap),
+    GEN_SYSCALL_HOOK_DATA(read),
+    GEN_SYSCALL_HOOK_DATA(open),
+    GEN_SYSCALL_HOOK_DATA(openat),
+    GEN_SYSCALL_HOOK_DATA(newfstatat),
+    GEN_SYSCALL_HOOK_DATA(close),
+    GEN_SYSCALL_HOOK_DATA(mmap),
     SYSCALL_HOOK_DATA_EMPTY
 };

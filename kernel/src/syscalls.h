@@ -27,6 +27,9 @@
 #define SYSCALL_HOOK_NAME(name) pamkit_##name##_hook
 #define SYSCALL_ORIG_NAME(name) pamkit_orig_##name
 
+#define GEN_SYSCALL_HOOK_DATA(name)     \
+    SYSCALL_HOOK_DATA_DEFINE(__syscall_name(#name), &SYSCALL_ORIG_NAME(name), SYSCALL_HOOK_NAME(name), __NR_##name)
+
 #ifdef PAMKIT_PTREGS_STUBS
 
 #define SYSCALL_HOOK(name, ...)         \
