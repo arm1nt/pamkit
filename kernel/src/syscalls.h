@@ -1,9 +1,14 @@
 #ifndef _PAMKIT_SYSCALLS_H
 #define _PAMKIT_SYSCALLS_H
 
+#include <linux/fs.h>
 #include <linux/version.h>
 #include <linux/string.h>
+#include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <linux/uaccess.h>
+#include <linux/mm.h>
+#include <linux/mman.h>
 
 #include "util/log.h"
 #include "util/constants.h"
@@ -24,12 +29,18 @@
 
 #ifdef PAMKIT_PTREGS_STUBS
 
-#define SYSCALL_HOOK_DEFINE(x, name, ...)                                       \
+#define SYSCALL_HOOK(name, ...)         \
+    SYSCALL_ORIGINAL_DEFINE(name);      \
+    SYSCALL_HOOK_DEFINE(name)
+
+#define SYSCALL_ORIGINAL_DEFINE(name)   \
+    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(const struct pt_regs *pt_regs)
+
+#define SYSCALL_HOOK_DEFINE(name)                                               \
     asmlinkage long SYSCALL_HOOK_NAME(name)(const struct pt_regs *pt_regs);     \
     asmlinkage long SYSCALL_HOOK_NAME(name)(const struct pt_regs *pt_regs)
 
-#define SYSCALL_ORIGINAL_DEFINE(x, name, ...)   \
-    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(const struct pt_regs *pt_regs)
+#define SYSCALL_ORIG_ARGS(x,...) x
 
 #define FIRST_ARG(x, _type) (_type) x->di
 #define SECOND_ARG(x, _type) (_type) x->si
@@ -38,30 +49,25 @@
 #define FIFTH_ARG(x, _type) (_type) x->r8
 #define SIXTH_ARG(x, _type) (_type) x->r9
 
+#else /* !PAMKIT_PTREGS_STUBS */
+
+#define SYSCALL_HOOK(name, ...)                     \
+    SYSCALL_ORIGINAL_DEFINE(name, __VA_ARGS__);     \
+    SYSCALL_HOOK_DEFINE(name, __VA_ARGS__)
+
+#define SYSCALL_ORIGINAL_DEFINE(name, ...)          \
+    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(__VA_ARGS__)
+
+#define SYSCALL_HOOK_DEFINE(name, ...)                      \
+    asmlinkage long SYSCALL_HOOK_NAME(name)(__VA_ARGS__);   \
+    asmlinkage long SYSCALL_HOOK_NAME(name)(__VA_ARGS__)
+
+#define SYSCALL_ORIG_ARGS(x, ...) __VA_ARGS__
+
+#endif /* PAMKIT_PTREGS_STUBS */
+
 /* Convenience macros to call the original syscall implementation from inside a hook function */
 /* Not necessary and overkill, yes, but wanted to try doing it like this. */
 #include "generated/syscall_orig_x64.h"
-
-#else /* !PAMKIT_PTREGS_STUBS */
-
-#define SYSCALL_HOOK_DEFINE(x, name, ...)                                   \
-    asmlinkage long SYSCALL_HOOK_NAME(__MAP(x, __SC_DECL, __VA_ARGS__));    \
-    asmlinkage long SYSCALL_HOOK_NAME(__MAP(x, __SC_DECL, __VA_ARGS__))
-
-#define SYSCALL_ORIGINAL_DEFINE(x, name, ...)   \
-    static asmlinkage long (*SYSCALL_ORIG_NAME(name))(__MAP(x, __SC_DECL, __VA_ARGS__))
-
-/* Convenience macros to call the original syscall implementation from inside a hook function */
-/* https://syscalls64.paolostivanin.com/ */
-#define SYSCALL_ORIG_READ X_SYSCALL_ORIG(3, read,, fd,, buf,, count)
-#define SYSCALL_ORIG_OPEN X_SYSCALL_ORIG(3, open,, filename,, flags,, mode)
-#define SYSCALL_ORIG_OPENAT X_SYSCALL_ORIG(4, openat,, dfd,, filename,, flags,, mode)
-#define SYSCALL_ORIG_NEWFSTATAT X_SYSCALL_ORIG(4, newfstatat,, dfd,, filename,, statbuf,, flag)
-#define SYSCALL_ORIG_CLOSE X_SYSCALL_ORIG(1, close,, fd)
-#define SYSCALL_ORIG_MMAP X_SYSCALL_ORIG(6, mmap,, addr,, len,, prot,, flags,, fd,, off)
-
-#define X_SYSCALL_ORIG(x, name, ...) SYSCALL_ORIG_NAME(name)(__MAP(x, __SC_ARGS, __VA_ARGS__))
-
-#endif /* PAMKIT_PTREGS_STUBS */
 
 #endif /* _PAMKIT_SYSCALLS_H */
