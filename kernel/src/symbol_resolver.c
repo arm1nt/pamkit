@@ -1,12 +1,11 @@
 #include "symbol_resolver.h"
+#include "util/constants.h"
+#include "util/log.h"
 
 #include <linux/kprobes.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/version.h>
-
-#include "util/constants.h"
-#include  "util/log.h"
 
 typedef uintptr_t (*pamkit_kallsyms_lookup_name_t)(const char *name);
 
@@ -89,15 +88,19 @@ is_kallsyms_lookup_name_symbol(char *name)
 static int
 generic_get_kallsyms_lookup_name_addr(void)
 {
-    char *name_buffer = kzalloc(KSYM_SYMBOL_LEN * sizeof(char), GFP_KERNEL);
+    char *name_buffer;
+    unsigned long kaddr;
+    size_t i;
+
+    name_buffer = kzalloc(KSYM_SYMBOL_LEN * sizeof(char), GFP_KERNEL);
     if (!name_buffer) {
         prerr("Failed to allocate memory for the name buffer in 'generic_get_kallsyms_lookup_name_addr'!");
         return PAMKIT_GENERIC_ERROR;
     }
 
-    unsigned long kaddr = get_kernel_text_region_base_addr();
+    kaddr = get_kernel_text_region_base_addr();
 
-    for (size_t i = 0x00; i < 0x100000; i++) {
+    for (i = 0x00; i < 0x100000; i++) {
 
         if (!virt_addr_valid(kaddr)) {
             prdebug("Encountered invalid address 0x%px in 'generic_get_kallsyms_lookup_name_addr'", (void *) kaddr);
@@ -147,12 +150,14 @@ init_symbol_resolver(void)
 void *
 pamkit_lookup_symbol_addr(const char *symbol_name)
 {
+    void *result;
+
     if (unlikely(pamkit_kallsyms_lookup_name == NULL)) {
         prwarn("Symbol resolver not initialized!");
         return NULL;
     }
 
-    void *result = (void *) pamkit_kallsyms_lookup_name(symbol_name);
+    result = (void *) pamkit_kallsyms_lookup_name(symbol_name);
     prdebug("Resolved symbol '%s' to address: 0x%px", symbol_name, result);
     return result;
 }
