@@ -5,7 +5,6 @@
 
 #include <linux/version.h>
 
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
 #define PAMKIT_PTREGS_STUBS 1
 #endif

@@ -2,9 +2,14 @@ NAME := pamkit
 
 obj-m := $(NAME).o
 
-$(NAME)-y += init.o symbol_resolver.o util/read_table.o sys.o
-$(NAME)-y += hooking/hooking.o hooking/impls/ftrace.o hooking/impls/syscall_table.o \
-			hooking/impls/switch_patching.o hooking/impls/helpers.o
+$(NAME)-y := init.o
+$(NAME)-y += symbol_resolver.o
+$(NAME)-y += hooking/hooking.o \
+			hooking/impls/ftrace.o \
+			hooking/impls/syscall_table.o \
+			hooking/impls/switch_patching.o \
+			hooking/impls/helpers.o
+$(NAME)-y += syscalls/syscalls.o
 $(NAME)-y += net/net.o
 
 ifeq ($(DEBUG_BUILD), 1)
@@ -118,5 +123,7 @@ endif
 
 clean:
 	@echo "Doing cleanup..."
+	@if [ -f compile_commands.json ]; then cp compile_commands.json .compile_commands.json.bak; fi
 	@make -C $(KERNEL_DIR) M=$(PWD) clean
+	@if [ -f .compile_commands.json.bak ]; then mv .compile_commands.json.bak compile_commands.json; fi
 	$(RM) $(GEN_ORIG_SYSCALL_HDR) $(SYSCALL_LIST_HDR)
