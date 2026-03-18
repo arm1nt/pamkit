@@ -6,6 +6,13 @@
 
 typedef unsigned long virtual_fd_t;
 
+static inline virtual_fd_t
+get_new_virtual_fd(const pid_t pid)
+{
+    // TODO:
+    return 0;
+}
+
 struct virtual_file_data {
     const char *data;
     const size_t data_len;
