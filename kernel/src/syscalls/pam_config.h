@@ -1,5 +1,5 @@
-#ifndef _PAMKIT_SYSCALLS_PAM_CONFIG_H
-#define _PAMKIT_SYSCALLS_PAM_CONFIG_H
+#ifndef PAMKIT_SYSCALLS_PAM_CONFIG_H
+#define PAMKIT_SYSCALLS_PAM_CONFIG_H
 
 #include "vfile.h"
 
@@ -38,8 +38,8 @@ static vfile_data_t virtual_files[NR_OF_VIRTUAL_FILES] = {
             "auth sufficient pam_listfile.so file=/etc/pam.d/sudo sense=allow onerr=succeed quiet\n"
             "@include common-auth\n"
             "@include common-account\n"
-            "@include common-session-noninteractive",
-        .data_len = 441
+            "@include common-session-noninteractive\n",
+        .data_len = 389
     }
 };
 
@@ -56,8 +56,7 @@ static inline vf_replacement_rule_t *
 get_vf_replacement_rule(const char *prog_name, const char *filepath)
 {
     for (size_t i = 0; i < NR_OF_VFILE_REPLACEMENT_RULES; i++) {
-        /* Note: For now we say as rule-of-thumb that it suffices for the filepath to be a substring */
-        if (strstr(vf_replacement_rules[i].file_to_be_replaced, filepath)) {
+        if (strcmp(vf_replacement_rules[i].file_to_be_replaced, filepath) == 0) {
             if (strcmp(vf_replacement_rules[i].program_name, prog_name) == 0) {
                 return &vf_replacement_rules[i];
             }
@@ -111,4 +110,4 @@ get_diskmod_config(const char *prog_name, const char *filepath)
     return NULL;
 }
 
-#endif /* _PAMKIT_SYSCALLS_PAM_CONFIG_H */
+#endif /* PAMKIT_SYSCALLS_PAM_CONFIG_H */

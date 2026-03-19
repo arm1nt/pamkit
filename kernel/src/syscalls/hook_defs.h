@@ -1,5 +1,5 @@
-#ifndef _PAMKIT_SYSCALLS_HOOK_DEFS_H
-#define _PAMKIT_SYSCALLS_HOOK_DEFS_H
+#ifndef PAMKIT_SYSCALLS_HOOK_DEFS_H
+#define PAMKIT_SYSCALLS_HOOK_DEFS_H
 
 #include "../hooking/hooking.h"
 
@@ -64,4 +64,4 @@
 /* ! Not necessary / the best approach and overkill, but I wanted to try it out */
 #include "../generated/syscall_orig_x64.h"
 
-#endif /* _PAMKIT_SYSCALLS_HOOK_DEFS_H */
+#endif /* PAMKIT_SYSCALLS_HOOK_DEFS_H */
