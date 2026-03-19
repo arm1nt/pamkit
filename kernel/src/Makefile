@@ -10,7 +10,7 @@ $(NAME)-y += hooking/hooking.o \
 			hooking/impls/switch_patching.o \
 			hooking/impls/helpers.o
 $(NAME)-y += syscalls/syscalls.o
-$(NAME)-y += net/net.o
+$(NAME)-y += net.o
 
 ifeq ($(DEBUG_BUILD), 1)
 	ccflags-y += -DDEBUG -g -O1

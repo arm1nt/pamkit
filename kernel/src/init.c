@@ -2,7 +2,7 @@
 #include <linux/module.h>
 
 #include "hooking/hooking.h"
-#include "net/net.h"
+#include "net.h"
 #include "util/sys_checks.h"
 #include "util/log.h"
 #include "util/constants.h"
@@ -16,9 +16,9 @@ extern hook_data_t pamkit_syscall_hooks[];
 static int __init
 pamkit_init(void)
 {
-    prdebug("Start initializing module...");
-
     int ret = 0;
+
+    prdebug("Start initializing module...");
 
     ret = add_netfilter_hook();
     if (ret) {
