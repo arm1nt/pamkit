@@ -1,12 +1,10 @@
 #ifndef PAMKIT_UTIL_USER_H
 #define PAMKIT_UTIL_USER_H
 
-#include "linux/err.h"
-#include "linux/string.h"
 #include "log.h"
 
 #include <linux/types.h>
-#include <linux/slab.h>
+#include "linux/string.h"
 #include <linux/uaccess.h>
 
 static char *
