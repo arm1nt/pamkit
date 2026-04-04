@@ -2,8 +2,10 @@
 
 #if defined(PAMKIT_FTRACE_SYSCALL_HOOKING)
 
+int install_syscall_hooks(hook_data_t syscall_hooks[]);
+int uninstall_syscall_hooks(hook_data_t syscall_hooks[]);
+
 #include <linux/module.h>
-#include <linux/version.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/err.h>
