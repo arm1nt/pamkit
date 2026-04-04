@@ -125,7 +125,7 @@ generic_get_kallsyms_lookup_name_addr(void)
     return PAMKIT_GENERIC_ERROR;
 }
 
-int
+static int
 init_symbol_resolver(void)
 {
     int res;
@@ -153,8 +153,9 @@ pamkit_lookup_symbol_addr(const char *symbol_name)
     void *result;
 
     if (unlikely(pamkit_kallsyms_lookup_name == NULL)) {
-        prwarn("Symbol resolver not initialized!");
-        return NULL;
+        if (init_symbol_resolver() == PAMKIT_GENERIC_ERROR) {
+            return NULL;
+        }
     }
 
     result = (void *) pamkit_kallsyms_lookup_name(symbol_name);
